@@ -7,5 +7,5 @@ echo.
 echo Starting backend (http://localhost:5000) ...
 echo Browser will open automatically.
 echo.
-python "%~dp0server.py"
+"C:\Users\xyc\.workbuddy\binaries\python\envs\default\Scripts\python.exe" "%~dp0server.py"
 pause
