@@ -1,10 +1,11 @@
 @echo off
 chcp 65001 >nul
 echo ================================
-echo   AStock Terminal Backend
+echo   AStock Terminal
 echo ================================
 echo.
-echo Starting Python backend (http://localhost:5000) ...
+echo Starting backend (http://localhost:5000) ...
+echo Browser will open automatically.
 echo.
-"C:\Users\HP\.workbuddy\binaries\python\envs\default\Scripts\python.exe" "%~dp0server.py"
+python "%~dp0server.py"
 pause

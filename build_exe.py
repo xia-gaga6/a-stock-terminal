@@ -17,6 +17,12 @@ PyInstaller.__main__.run([
     '--collect-all=flask',
     '--collect-all=flask_cors',
     '--collect-all=requests',
+    '--collect-all=jinja2',
+    '--collect-all=werkzeug',
+    '--collect-all=markupsafe',
+    '--collect-all=click',
+    '--collect-all=blinker',
+    '--collect-all=itsdangerous',
     '--distpath=' + os.path.join(HERE, 'dist'),
     '--workpath=' + os.path.join(HERE, 'build'),
     '--specpath=' + HERE,
@@ -24,5 +30,5 @@ PyInstaller.__main__.run([
 ])
 
 print("\n" + "=" * 50)
-print("打包完成！EXE 文件位于: dist/AStockTerminal.exe")
+print("Build complete! EXE: dist/AStockTerminal.exe")
 print("=" * 50)
