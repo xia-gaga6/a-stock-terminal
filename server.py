@@ -823,6 +823,165 @@ def api_announcement():
         return err(str(e))
 
 # ─────────────────────────────────────────────────────────
+# 22. 东方财富自选股
+# ─────────────────────────────────────────────────────────
+WATCHLIST_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "watchlist_config.json")
+
+def _read_wl_config():
+    if os.path.exists(WATCHLIST_CONFIG_FILE):
+        try:
+            with open(WATCHLIST_CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def _write_wl_config(cfg):
+    try:
+        with open(WATCHLIST_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def _parse_jsonp(text):
+    """从 JSONP 响应中提取 JSON 对象"""
+    if "(" in text and text.rstrip().endswith(")"):
+        inner = text[text.index("(") + 1: text.rindex(")")]
+        return json.loads(inner)
+    return json.loads(text)
+
+@app.route("/api/watchlist/config", methods=["GET", "POST"])
+def api_watchlist_config():
+    if request.method == "GET":
+        cfg = _read_wl_config()
+        # 不返回完整 cookie，只返回是否已配置
+        return ok({
+            "has_cookie": bool(cfg.get("cookie")),
+            "has_appkey": bool(cfg.get("appkey")),
+            "cookie_preview": (cfg.get("cookie", "")[:30] + "...") if cfg.get("cookie") else "",
+            "appkey": cfg.get("appkey", ""),
+            "manual_codes": cfg.get("manual_codes", []),
+        })
+    else:
+        data = request.get_json(force=True)
+        cfg = _read_wl_config()
+        if data.get("cookie"):
+            cfg["cookie"] = data["cookie"].strip()
+        if data.get("appkey"):
+            cfg["appkey"] = data["appkey"].strip()
+        if "manual_codes" in data:
+            cfg["manual_codes"] = data["manual_codes"]
+        _write_wl_config(cfg)
+        return ok({"msg": "配置已保存"})
+
+@app.route("/api/watchlist/groups")
+def api_watchlist_groups():
+    """获取东方财富自选股分组列表"""
+    cfg = _read_wl_config()
+    cookie = cfg.get("cookie", "")
+    appkey = cfg.get("appkey", "")
+    if not cookie or not appkey:
+        return err("请先配置 Cookie 和 AppKey")
+    try:
+        ts = int(time.time() * 1000)
+        url = f"https://myfavor.eastmoney.com/v4/webouter/ggdefstkindexinfos"
+        params = {
+            "appkey": appkey,
+            "cb": f"jQuery_{ts}",
+            "g": "1",
+            "_": str(ts),
+        }
+        headers = {
+            "User-Agent": UA,
+            "Cookie": cookie,
+            "Referer": "https://quote.eastmoney.com/zixuan/",
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        result = _parse_jsonp(r.text)
+        groups = result.get("data", {}).get("ginfolist", []) or []
+        return ok([{
+            "id": str(g.get("gid", "")),
+            "name": g.get("gname", ""),
+            "version": g.get("version", ""),
+            "source": g.get("source", ""),
+        } for g in groups])
+    except Exception as e:
+        return err(f"获取分组失败: {e}")
+
+@app.route("/api/watchlist/stocks")
+def api_watchlist_stocks():
+    """获取某个分组内的股票列表"""
+    cfg = _read_wl_config()
+    cookie = cfg.get("cookie", "")
+    appkey = cfg.get("appkey", "")
+    group_id = request.args.get("gid", "")
+    if not cookie or not appkey:
+        return err("请先配置 Cookie 和 AppKey")
+    if not group_id:
+        return err("请提供分组ID")
+    try:
+        ts = int(time.time() * 1000)
+        url = f"https://myfavor.eastmoney.com/v4/webouter/gstkinfos"
+        params = {
+            "appkey": appkey,
+            "cb": f"jQuery_{ts}",
+            "g": group_id,
+            "_": str(ts),
+        }
+        headers = {
+            "User-Agent": UA,
+            "Cookie": cookie,
+            "Referer": "https://quote.eastmoney.com/zixuan/",
+        }
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        result = _parse_jsonp(r.text)
+        stk_list = result.get("data", {}).get("stkinfolist", []) or []
+        stocks = []
+        for item in stk_list:
+            security = item.get("security", "")
+            # 格式: "0$000001" 或 "1$600519" → 市场代码$股票代码
+            parts = security.split("$")
+            code = parts[1] if len(parts) >= 2 else security
+            market = parts[0] if len(parts) >= 2 else ""
+            stocks.append({
+                "code": code,
+                "name": item.get("sname", ""),
+                "market": market,
+                "security": security,
+            })
+        return ok(stocks)
+    except Exception as e:
+        return err(f"获取自选股失败: {e}")
+
+@app.route("/api/watchlist/manual", methods=["GET", "POST"])
+def api_watchlist_manual():
+    """手动管理自选股代码列表"""
+    cfg = _read_wl_config()
+    if request.method == "GET":
+        return ok(cfg.get("manual_codes", []))
+    else:
+        data = request.get_json(force=True)
+        codes = data.get("codes", [])
+        # 去重 + 去空
+        codes = list(dict.fromkeys([c.strip() for c in codes if c.strip()]))
+        cfg["manual_codes"] = codes
+        _write_wl_config(cfg)
+        return ok(codes)
+
+@app.route("/api/watchlist/quotes")
+def api_watchlist_quotes():
+    """批量获取自选股实时行情"""
+    codes = request.args.get("codes", "").strip()
+    if not codes:
+        return ok([])
+    code_list = [c.strip() for c in codes.split(",") if c.strip()]
+    try:
+        data = tencent_quote(code_list)
+        return ok(data)
+    except Exception as e:
+        return err(f"获取行情失败: {e}")
+
+# ─────────────────────────────────────────────────────────
 # 健康检测
 # ─────────────────────────────────────────────────────────
 @app.route("/api/ping")

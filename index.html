@@ -275,6 +275,9 @@
     </div>
     <div class="nav-section">
       <div class="nav-section-label">信息</div>
+      <div class="nav-item" data-page="watchlist" onclick="switchPage('watchlist',this)">
+        <span class="nav-icon">⭐</span>自选股
+      </div>
       <div class="nav-item" data-page="news" onclick="switchPage('news',this)">
         <span class="nav-icon">📰</span>资讯快讯
       </div>
@@ -522,6 +525,77 @@
     </div>
 
     <!-- ═══════════════════════════════════ PAGE: 资讯快讯 ═══════════════════════════════════ -->
+    <!-- ═══════════════════════════════════ PAGE: 自选股 ═══════════════════════════════════ -->
+    <div class="page gap12" id="page-watchlist">
+
+      <!-- 配置面板 -->
+      <div class="panel" id="wlConfigPanel">
+        <div class="panel-header">
+          <span class="panel-title">东方财富自选股 — 账号配置</span>
+          <button class="refresh-btn" onclick="toggleWlConfig()">⚙ 设置</button>
+        </div>
+        <div id="wlConfigBody" style="display:none;padding:16px;">
+          <div style="background:#fffbe6;border:1px solid #ffe58f;border-radius:8px;padding:12px;margin-bottom:12px;font-size:13px;color:#8c6d1f;">
+            <b>获取方式：</b><br>
+            1. 浏览器打开 <a href="https://quote.eastmoney.com/zixuan/" target="_blank">东方财富自选股</a> 并登录<br>
+            2. 按 F12 打开开发者工具 → Network（网络）标签<br>
+            3. 刷新页面，找到 <code>myfavor.eastmoney.com</code> 的请求<br>
+            4. 复制请求 URL 中的 <code>appkey=xxx</code> 参数值<br>
+            5. 复制请求头中的 <code>Cookie</code> 整行值
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div>
+              <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">AppKey</label>
+              <input id="wlAppkey" type="text" placeholder="从 myfavor.eastmoney.com 请求URL中提取" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px;">
+            </div>
+            <div>
+              <label style="font-size:13px;font-weight:600;display:block;margin-bottom:4px;">Cookie</label>
+              <textarea id="wlCookie" rows="3" placeholder="从浏览器请求头中复制完整Cookie值" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:monospace;resize:vertical;"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button onclick="saveWlConfig()" style="padding:8px 20px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">保存配置</button>
+              <button onclick="testWlConfig()" style="padding:8px 20px;background:#52c41a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;">测试连接</button>
+            </div>
+            <div id="wlConfigStatus" style="font-size:13px;margin-top:4px;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 分组选择 + 自选股列表 -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">⭐ 我的自选股</span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="wlGroupSelect" onchange="loadWlStocks()" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+              <option value="">-- 选择分组 --</option>
+            </select>
+            <button class="refresh-btn" onclick="refreshWlQuotes()">↻ 刷新行情</button>
+          </div>
+        </div>
+        <div id="wlTableContainer" style="padding:0;">
+          <div class="loading-row">请先选择分组或添加手动自选股</div>
+        </div>
+      </div>
+
+      <!-- 手动添加自选股 -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">手动管理自选股</span>
+          <button class="refresh-btn" onclick="addManualCode()">+ 添加</button>
+        </div>
+        <div style="padding:16px;">
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <input id="wlManualInput" type="text" placeholder="输入股票代码，逗号分隔（如 000001,600519,300750）" style="flex:1;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px;" onkeydown="if(event.key==='Enter')addManualCode()">
+            <button onclick="addManualCode()" style="padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;">添加</button>
+            <button onclick="loadManualQuotes()" style="padding:8px 16px;background:#722ed1;color:#fff;border:none;border-radius:6px;cursor:pointer;">查看行情</button>
+          </div>
+          <div id="wlManualList" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ═══════════════════════════════════ PAGE: 资讯快讯 ═══════════════════════════════════ -->
     <div class="page gap12" id="page-news">
       <div class="panel">
         <div class="panel-header">
@@ -604,6 +678,7 @@ function switchPage(name, el) {
     if (name === 'hot') loadHot();
     if (name === 'dragon') loadDragon();
     if (name === 'news') loadNews();
+    if (name === 'watchlist') loadWatchlist();
   }
 }
 
@@ -1111,6 +1186,254 @@ function calcPEG() {
     <div class="stat-tile"><div class="stat-label">PE消化(到${targetPE}x)</div><div class="stat-value" style="color:${digestColor}">${digest.toFixed(1)}年</div>
       <div class="stat-sub">${digest < 2 ? '快速消化' : digest < 3.5 ? '合理' : '消化慢'}</div></div>`;
   document.getElementById('pegResult').style.display = 'block';
+}
+
+// ────────────────────────────────────────────────────────
+// 自选股
+// ────────────────────────────────────────────────────────
+let wlCurrentCodes = [];   // 当前显示的股票代码
+let wlCurrentSource = '';  // 'em' = 东财同步, 'manual' = 手动
+let wlTimer = null;
+
+async function loadWatchlist() {
+  try {
+    const cfg = await apiFetch('/watchlist/config');
+    if (cfg.has_cookie && cfg.has_appkey) {
+      document.getElementById('wlAppkey').value = cfg.appkey || '';
+      document.getElementById('wlCookie').value = '';
+      document.getElementById('wlConfigStatus').innerHTML = '<span style="color:#52c41a;">✓ 已配置（Cookie已保存）</span>';
+      loadWlGroups();
+    }
+    renderManualList(cfg.manual_codes || []);
+  } catch(e) {
+    console.error('watchlist config load error:', e);
+  }
+}
+
+function toggleWlConfig() {
+  const body = document.getElementById('wlConfigBody');
+  body.style.display = body.style.display === 'none' ? 'block' : 'none';
+}
+
+async function saveWlConfig() {
+  const appkey = document.getElementById('wlAppkey').value.trim();
+  const cookie = document.getElementById('wlCookie').value.trim();
+  if (!appkey && !cookie) { alert('请填入 AppKey 或 Cookie'); return; }
+  try {
+    const r = await fetch(API + '/watchlist/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({appkey, cookie})
+    });
+    const d = await r.json();
+    if (d.code === 0) {
+      document.getElementById('wlConfigStatus').innerHTML = '<span style="color:#52c41a;">✓ 配置已保存</span>';
+      loadWlGroups();
+    } else {
+      alert('保存失败: ' + d.msg);
+    }
+  } catch(e) {
+    alert('保存失败: ' + e.message);
+  }
+}
+
+async function testWlConfig() {
+  const status = document.getElementById('wlConfigStatus');
+  status.innerHTML = '<span style="color:#1890ff;">⏳ 测试中...</span>';
+  try {
+    const groups = await apiFetch('/watchlist/groups');
+    if (groups && groups.length > 0) {
+      status.innerHTML = `<span style="color:#52c41a;">✓ 连接成功！共 ${groups.length} 个分组</span>`;
+      const sel = document.getElementById('wlGroupSelect');
+      sel.innerHTML = '<option value="">-- 选择分组 --</option>';
+      groups.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = `${g.name} (${g.source})`;
+        sel.appendChild(opt);
+      });
+    } else {
+      status.innerHTML = '<span style="color:#faad14;">⚠ 连接成功但无分组数据</span>';
+    }
+  } catch(e) {
+    status.innerHTML = `<span style="color:#ff4d4f;">✗ ${e.message}</span>`;
+  }
+}
+
+async function loadWlGroups() {
+  try {
+    const groups = await apiFetch('/watchlist/groups');
+    const sel = document.getElementById('wlGroupSelect');
+    sel.innerHTML = '<option value="">-- 选择分组 --</option>';
+    if (groups && groups.length > 0) {
+      groups.forEach(g => {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = `${g.name} (${g.source})`;
+        sel.appendChild(opt);
+      });
+    }
+  } catch(e) {
+    console.error('load groups error:', e);
+  }
+}
+
+async function loadWlStocks() {
+  const gid = document.getElementById('wlGroupSelect').value;
+  if (!gid) return;
+  const container = document.getElementById('wlTableContainer');
+  container.innerHTML = '<div class="loading-row">加载中…</div>';
+  try {
+    const stocks = await apiFetch(`/watchlist/stocks?gid=${gid}`);
+    wlCurrentCodes = stocks.map(s => s.code);
+    wlCurrentSource = 'em';
+    // 保存名称映射
+    window._wlNames = {};
+    stocks.forEach(s => { window._wlNames[s.code] = s.name; });
+    await refreshWlQuotes();
+  } catch(e) {
+    container.innerHTML = `<div style="padding:16px;color:#ff4d4f;">加载失败: ${e.message}</div>`;
+  }
+}
+
+async function refreshWlQuotes() {
+  if (!wlCurrentCodes.length) return;
+  const container = document.getElementById('wlTableContainer');
+  container.innerHTML = '<div class="loading-row">刷新行情中…</div>';
+  try {
+    const codes = wlCurrentCodes.join(',');
+    const data = await apiFetch(`/watchlist/quotes?codes=${codes}`);
+    renderWlTable(data);
+    // 30秒自动刷新
+    if (wlTimer) clearTimeout(wlTimer);
+    wlTimer = setTimeout(refreshWlQuotes, 30000);
+  } catch(e) {
+    container.innerHTML = `<div style="padding:16px;color:#ff4d4f;">行情获取失败: ${e.message}</div>`;
+  }
+}
+
+function renderWlTable(data) {
+  const container = document.getElementById('wlTableContainer');
+  if (!data || Object.keys(data).length === 0) {
+    container.innerHTML = '<div class="loading-row">暂无行情数据</div>';
+    return;
+  }
+  let rows = '';
+  // 按涨跌幅排序
+  const codes = Object.keys(data).sort((a, b) => {
+    const da = data[a].change_pct || 0;
+    const db = data[b].change_pct || 0;
+    return db - da;
+  });
+  for (const code of codes) {
+    const q = data[code];
+    const name = window._wlNames?.[code] || q.name || code;
+    const chgClass = (q.change_pct || 0) > 0 ? 'up' : (q.change_pct || 0) < 0 ? 'down' : 'flat';
+    rows += `
+      <tr style="cursor:pointer;" onclick="quickViewStock('${code}')">
+        <td style="font-weight:600;">${code}</td>
+        <td>${name}</td>
+        <td class="${chgClass}">${fmt(q.price)}</td>
+        <td class="${chgClass}">${fmtPct(q.change_pct)}</td>
+        <td>${fmt(q.open)}</td>
+        <td>${fmt(q.high)}</td>
+        <td>${fmt(q.low)}</td>
+        <td>${(q.amount_wan/10000).toFixed(2)}亿</td>
+        <td>${fmt(q.turnover_pct)}%</td>
+        <td>${fmt(q.pe_ttm)}</td>
+        <td>${fmt(q.pb)}</td>
+      </tr>`;
+  }
+  container.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <thead>
+        <tr style="background:var(--bg);color:var(--text-sub);font-weight:600;">
+          <th style="padding:8px;text-align:left;">代码</th>
+          <th style="padding:8px;text-align:left;">名称</th>
+          <th style="padding:8px;text-align:right;">现价</th>
+          <th style="padding:8px;text-align:right;">涨跌幅</th>
+          <th style="padding:8px;text-align:right;">开盘</th>
+          <th style="padding:8px;text-align:right;">最高</th>
+          <th style="padding:8px;text-align:right;">最低</th>
+          <th style="padding:8px;text-align:right;">成交额</th>
+          <th style="padding:8px;text-align:right;">换手</th>
+          <th style="padding:8px;text-align:right;">PE(TTM)</th>
+          <th style="padding:8px;text-align:right;">PB</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function quickViewStock(code) {
+  // 跳转到个股分析页
+  const navEl = document.querySelector('[data-page="stock"]');
+  switchPage('stock', navEl);
+  const input = document.getElementById('stockCode');
+  if (input) {
+    input.value = code;
+    queryStock();
+  }
+}
+
+// ── 手动管理 ──
+async function addManualCode() {
+  const input = document.getElementById('wlManualInput');
+  const raw = input.value.trim();
+  if (!raw) return;
+  const newCodes = raw.split(/[,，\s]+/).map(c => c.trim().padStart(6, '0')).filter(c => /^\d{6}$/.test(c));
+  if (!newCodes.length) { alert('请输入有效的6位股票代码'); return; }
+  try {
+    const r = await fetch(API + '/watchlist/manual', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({codes: [...wlCurrentCodes.filter(c => wlCurrentSource === 'manual'), ...newCodes]})
+    });
+    const d = await r.json();
+    if (d.code === 0) {
+      input.value = '';
+      renderManualList(d.data);
+    }
+  } catch(e) {
+    alert('添加失败: ' + e.message);
+  }
+}
+
+async function removeManualCode(code) {
+  const current = (await apiFetch('/watchlist/manual')).filter(c => c !== code);
+  try {
+    const r = await fetch(API + '/watchlist/manual', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({codes: current})
+    });
+    const d = await r.json();
+    if (d.code === 0) renderManualList(d.data);
+  } catch(e) {
+    alert('删除失败: ' + e.message);
+  }
+}
+
+function renderManualList(codes) {
+  const container = document.getElementById('wlManualList');
+  if (!codes || !codes.length) {
+    container.innerHTML = '<span style="color:var(--text-sub);font-size:13px;">暂无手动自选股，请在上方输入框添加</span>';
+    return;
+  }
+  container.innerHTML = codes.map(code => `
+    <span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:#f0f5ff;border:1px solid #adc6ff;border-radius:16px;font-size:13px;">
+      ${code}
+      <span onclick="removeManualCode('${code}')" style="cursor:pointer;color:#ff4d4f;font-weight:bold;margin-left:2px;">×</span>
+    </span>`).join('');
+}
+
+async function loadManualQuotes() {
+  const codes = await apiFetch('/watchlist/manual');
+  if (!codes.length) { alert('请先添加自选股代码'); return; }
+  wlCurrentCodes = codes;
+  wlCurrentSource = 'manual';
+  window._wlNames = {};
+  await refreshWlQuotes();
 }
 
 // ────────────────────────────────────────────────────────
