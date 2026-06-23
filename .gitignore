@@ -35,3 +35,6 @@ dist/
 # Temporary
 tmp/
 *.tmp
+
+# Sensitive config (contains cookie/token)
+watchlist_config.json
