@@ -74,15 +74,17 @@ def err(msg):
     return jsonify({"code": -1, "msg": msg}), 500
 
 # ─────────────────────────────────────────────────────────
-# 1. 行情 — 腾讯财经（不封IP）
+# 1. 行情 — 腾讯财经（用 requests 替代 urllib，走系统代理）
 # ─────────────────────────────────────────────────────────
-def tencent_quote(codes):
-    prefixed = [f"{get_prefix(c)}{c}" for c in codes]
+def tencent_quote(codes, prefixes=None):
+    """批量行情. prefixes: 可选, 指定每个 code 的前缀 sh/sz/bj (用于区分指数和股票)"""
+    if prefixes:
+        prefixed = [f"{prefixes[i]}{codes[i]}" for i in range(len(codes))]
+    else:
+        prefixed = [f"{get_prefix(c)}{c}" for c in codes]
     url = "https://qt.gtimg.cn/q=" + ",".join(prefixed)
-    req = urllib.request.Request(url)
-    req.add_header("User-Agent", UA)
-    resp = urllib.request.urlopen(req, timeout=10)
-    raw = resp.read().decode("gbk")
+    resp = requests.get(url, headers={"User-Agent": UA}, timeout=10)
+    raw = resp.content.decode("gbk")
 
     result = {}
     for line in raw.strip().split(";"):
@@ -134,7 +136,9 @@ def api_quote():
 def api_indices():
     codes = ["000001", "000300", "399006", "000688"]  # 上证/沪深300/创业板/科创50
     try:
-        q = tencent_quote(codes)
+        # 指数需要指定前缀: 000xxx=sh, 399xxx=sz
+        prefixes = ["sh", "sh", "sz", "sh"]
+        q = tencent_quote(codes, prefixes=prefixes)
         result = []
         labels = {"000001": "上证指数", "000300": "沪深300", "399006": "创业板指", "000688": "科创50"}
         for c in codes:
@@ -201,26 +205,28 @@ def api_stock():
 @app.route("/api/industry")
 def api_industry():
     try:
-        url = "https://push2.eastmoney.com/api/qt/clist/get"
+        # 改用 datacenter-web（push2 被封），获取行业板块涨跌排行
+        url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
         params = {
-            "pn": "1", "pz": "50", "po": "1", "np": "1",
-            "fltt": "2", "invt": "2",
-            "fs": "m:90+t:2",
-            "fields": "f2,f3,f4,f12,f13,f14,f104,f105,f128,f136,f140,f141,f207",
+            "reportName": "RPT_BOARD_INDUSTRY_PCT",
+            "columns": "ALL",
+            "pageNumber": "1", "pageSize": "50",
+            "sortColumns": "CHANGE_RATE", "sortTypes": "-1",
+            "source": "WEB", "client": "WEB",
         }
         r = em_get(url, params=params, timeout=15)
-        items = r.json().get("data", {}).get("diff", [])
+        items = r.json().get("result", {}).get("data", []) or []
         rows = []
         for i, item in enumerate(items[:30]):
             rows.append({
                 "rank": i + 1,
-                "name": item.get("f14", ""),
-                "change_pct": round(float(item.get("f3", 0) or 0), 2),
-                "code": item.get("f12", ""),
-                "up_count": item.get("f104", 0),
-                "down_count": item.get("f105", 0),
-                "leader": item.get("f140", ""),
-                "leader_change": round(float(item.get("f136", 0) or 0), 2),
+                "name": item.get("BOARD_NAME", ""),
+                "change_pct": round(float(item.get("CHANGE_RATE", 0) or 0), 2),
+                "code": item.get("BOARD_CODE", ""),
+                "up_count": item.get("UP_COUNT", 0),
+                "down_count": item.get("DOWN_COUNT", 0),
+                "leader": item.get("LEADER_STOCK_NAME", ""),
+                "leader_change": round(float(item.get("LEADER_STOCK_CHANGE_RATE", 0) or 0), 2),
             })
         return ok(rows)
     except Exception as e:
@@ -313,6 +319,7 @@ def api_northbound():
 # 8. 个股资金流（120日）
 # ─────────────────────────────────────────────────────────
 def stock_fund_flow_internal(code):
+    """个股资金流 — 优先 push2his，失败返回空列表（push2his 可能被网络封锁）"""
     market_code = 1 if code.startswith("6") else 0
     url = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
     params = {
@@ -322,8 +329,11 @@ def stock_fund_flow_internal(code):
         "lmt": "120",
     }
     headers = {"User-Agent": UA, "Referer": "https://quote.eastmoney.com/"}
-    r = em_get(url, params=params, headers=headers, timeout=15)
-    klines = r.json().get("data", {}).get("klines", [])
+    try:
+        r = em_get(url, params=params, headers=headers, timeout=10)
+        klines = r.json().get("data", {}).get("klines", [])
+    except Exception:
+        return []  # push2his 被封时静默返回空
     rows = []
     for line in klines:
         parts = line.split(",")
@@ -432,7 +442,7 @@ def api_kline():
         return err(str(e))
 
 # ─────────────────────────────────────────────────────────
-# 11. 股票搜索（腾讯查询接口）
+# 11. 股票搜索（东方财富搜索API）
 # ─────────────────────────────────────────────────────────
 @app.route("/api/search")
 def api_search():
@@ -440,23 +450,17 @@ def api_search():
     if not kw:
         return ok([])
     try:
-        url = f"https://smartbox.gtimg.cn/s3/?v=2&q={kw}&type=N&count=10"
-        req = urllib.request.Request(url)
-        req.add_header("User-Agent", UA)
-        resp = urllib.request.urlopen(req, timeout=5)
-        raw = resp.read().decode("utf-8")
-        # 格式: v_hint="...~股票~代码~名称..."
-        inner = raw.split('"')[1] if '"' in raw else ""
-        parts = [p for p in inner.split("^") if p]
+        url = "https://searchapi.eastmoney.com/api/suggest/get"
+        params = {"input": kw, "type": "14", "count": "10"}
+        r = requests.get(url, params=params, headers={"User-Agent": UA}, timeout=5)
+        items = r.json().get("Data", []) or []
         result = []
-        for p in parts[:8]:
-            fields = p.split("~")
-            if len(fields) >= 3:
-                result.append({
-                    "code": fields[1],
-                    "name": fields[2],
-                    "type": fields[0],
-                })
+        for item in items[:8]:
+            result.append({
+                "code": item.get("Code", ""),
+                "name": item.get("Name", ""),
+                "type": "stock",
+            })
         return ok(result)
     except Exception as e:
         return err(str(e))

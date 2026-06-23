@@ -1121,7 +1121,7 @@ let backendOk = false;
 async function checkBackend() {
   const dot = document.getElementById('statusDot');
   try {
-    const r = await fetch(API + '/quote?codes=000001');
+    const r = await fetch(API + '/ping');
     const j = await r.json();
     if (j && j.code === 0) {
       dot.className = 'status-dot ok';
