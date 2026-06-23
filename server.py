@@ -2,18 +2,27 @@
 A股金融终端 — Flask 后端
 提供前端所需的所有真实数据接口
 """
+import os
+import sys
 import time
 import random
 import uuid
 import json
 import math
+import threading
 import urllib.request
 import requests
 from datetime import datetime, date, timedelta
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 
-app = Flask(__name__)
+# PyInstaller 打包后资源路径
+def resource_path(relative_path):
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath('.'), relative_path)
+
+app = Flask(__name__, static_folder=resource_path(''), static_url_path='')
 CORS(app)
 
 # ─────────────────────────────────────────────────────────
@@ -498,15 +507,339 @@ def api_stocknews():
         return err(str(e))
 
 # ─────────────────────────────────────────────────────────
+# 13. 研报列表（东财 reportapi）
+# ─────────────────────────────────────────────────────────
+@app.route("/api/research")
+def api_research():
+    code = request.args.get("code", "").strip().zfill(6)
+    if not code:
+        return err("请提供股票代码")
+    try:
+        REPORT_API = "https://reportapi.eastmoney.com/report/list"
+        params = {
+            "industryCode": "*", "pageSize": "30", "industry": "*",
+            "rating": "*", "ratingChange": "*",
+            "beginTime": "2000-01-01", "endTime": "2030-01-01",
+            "pageNo": "1", "fields": "", "qType": "0",
+            "code": code, "rcode": "", "p": "1", "pageNum": "1", "pageNumber": "1",
+        }
+        r = em_get(REPORT_API, params=params, headers={"Referer": "https://data.eastmoney.com/"}, timeout=30)
+        rows = []
+        for item in (r.json().get("data") or [])[:30]:
+            rows.append({
+                "title": item.get("title", ""),
+                "date": (item.get("publishDate") or "")[:10],
+                "org": item.get("orgSName", ""),
+                "rating": item.get("emRatingName", ""),
+                "eps_this": item.get("predictThisYearEps"),
+                "eps_next": item.get("predictNextYearEps"),
+                "industry": item.get("indvInduName", ""),
+                "info_code": item.get("infoCode", ""),
+            })
+        return ok(rows)
+    except Exception as e:
+        return err(str(e))
+
+# ─────────────────────────────────────────────────────────
+# 14. 融资融券明细
+# ─────────────────────────────────────────────────────────
+@app.route("/api/margin")
+def api_margin():
+    code = request.args.get("code", "").strip().zfill(6)
+    if not code:
+        return err("请提供股票代码")
+    try:
+        data = eastmoney_datacenter(
+            "RPTA_WEB_RZRQ_GGMX",
+            filter_str=f'(SCODE="{code}")',
+            page_size=30, sort_columns="DATE", sort_types="-1",
+        )
+        rows = []
+        for row in data:
+            rows.append({
+                "date": str(row.get("DATE", ""))[:10],
+                "rzye": row.get("RZYE", 0),
+                "rzmre": row.get("RZMRE", 0),
+                "rqye": row.get("RQYE", 0),
+                "rzrqye": row.get("RZRQYE", 0),
+            })
+        return ok(rows)
+    except Exception as e:
+        return err(str(e))
+
+# ─────────────────────────────────────────────────────────
+# 15. 大宗交易
+# ─────────────────────────────────────────────────────────
+@app.route("/api/blocktrade")
+def api_blocktrade():
+    code = request.args.get("code", "").strip().zfill(6)
+    if not code:
+        return err("请提供股票代码")
+    try:
+        data = eastmoney_datacenter(
+            "RPT_DATA_BLOCKTRADE",
+            filter_str=f'(SECURITY_CODE="{code}")',
+            page_size=20, sort_columns="TRADE_DATE", sort_types="-1",
+        )
+        rows = []
+        for row in data:
+            close = row.get("CLOSE_PRICE") or 0
+            deal_price = row.get("DEAL_PRICE") or 0
+            premium = ((deal_price / close - 1) * 100) if close else 0
+            rows.append({
+                "date": str(row.get("TRADE_DATE", ""))[:10],
+                "price": deal_price,
+                "close": close,
+                "premium_pct": round(premium, 2),
+                "vol": row.get("DEAL_VOLUME", 0),
+                "amount": row.get("DEAL_AMT", 0),
+                "buyer": row.get("BUYER_NAME", ""),
+                "seller": row.get("SELLER_NAME", ""),
+            })
+        return ok(rows)
+    except Exception as e:
+        return err(str(e))
+
+# ─────────────────────────────────────────────────────────
+# 16. 股东户数变化
+# ─────────────────────────────────────────────────────────
+@app.route("/api/holders")
+def api_holders():
+    code = request.args.get("code", "").strip().zfill(6)
+    if not code:
+        return err("请提供股票代码")
+    try:
+        data = eastmoney_datacenter(
+            "RPT_HOLDERNUMLATEST",
+            filter_str=f'(SECURITY_CODE="{code}")',
+            page_size=10, sort_columns="END_DATE", sort_types="-1",
+        )
+        rows = []
+        for row in data:
+            rows.append({
+                "date": str(row.get("END_DATE", ""))[:10],
+                "holder_num": row.get("HOLDER_NUM", 0),
+                "change_num": row.get("HOLDER_NUM_CHANGE", 0),
+                "change_ratio": row.get("HOLDER_NUM_RATIO", 0),
+                "avg_shares": row.get("AVG_FREE_SHARES", 0),
+            })
+        return ok(rows)
+    except Exception as e:
+        return err(str(e))
+
+# ─────────────────────────────────────────────────────────
+# 17. 分红送转历史
+# ─────────────────────────────────────────────────────────
+@app.route("/api/dividend")
+def api_dividend():
+    code = request.args.get("code", "").strip().zfill(6)
+    if not code:
+        return err("请提供股票代码")
+    try:
+        data = eastmoney_datacenter(
+            "RPT_SHAREBONUS_DET",
+            filter_str=f'(SECURITY_CODE="{code}")',
+            page_size=20, sort_columns="EX_DIVIDEND_DATE", sort_types="-1",
+        )
+        rows = []
+        for row in data:
+            rows.append({
+                "date": str(row.get("EX_DIVIDEND_DATE", ""))[:10],
+                "bonus_rmb": row.get("PRETAX_BONUS_RMB", 0),
+                "transfer_ratio": row.get("TRANSFER_RATIO", 0),
+                "bonus_ratio": row.get("BONUS_RATIO", 0),
+                "plan": row.get("ASSIGN_PROGRESS", ""),
+            })
+        return ok(rows)
+    except Exception as e:
+        return err(str(e))
+
+# ─────────────────────────────────────────────────────────
+# 18. 限售解禁日历
+# ─────────────────────────────────────────────────────────
+@app.route("/api/lockup")
+def api_lockup():
+    code = request.args.get("code", "").strip().zfill(6)
+    if not code:
+        return err("请提供股票代码")
+    try:
+        today_str = date.today().strftime("%Y-%m-%d")
+        end_str = (date.today() + timedelta(days=90)).strftime("%Y-%m-%d")
+
+        history_data = eastmoney_datacenter(
+            "RPT_LIFT_STAGE",
+            filter_str=f'(SECURITY_CODE="{code}")',
+            page_size=15, sort_columns="FREE_DATE", sort_types="-1",
+        )
+        history = []
+        for row in history_data:
+            history.append({
+                "date": str(row.get("FREE_DATE", ""))[:10],
+                "type": row.get("LIMITED_STOCK_TYPE", ""),
+                "shares": row.get("FREE_SHARES_NUM", 0),
+                "ratio": row.get("FREE_RATIO", 0),
+            })
+
+        upcoming_data = eastmoney_datacenter(
+            "RPT_LIFT_STAGE",
+            filter_str=f'(SECURITY_CODE="{code}")(FREE_DATE>=\'{today_str}\')(FREE_DATE<=\'{end_str}\')',
+            page_size=20, sort_columns="FREE_DATE", sort_types="1",
+        )
+        upcoming = []
+        for row in upcoming_data:
+            upcoming.append({
+                "date": str(row.get("FREE_DATE", ""))[:10],
+                "type": row.get("LIMITED_STOCK_TYPE", ""),
+                "shares": row.get("FREE_SHARES_NUM", 0),
+                "ratio": row.get("FREE_RATIO", 0),
+            })
+        return ok({"history": history, "upcoming": upcoming})
+    except Exception as e:
+        return err(str(e))
+
+# ─────────────────────────────────────────────────────────
+# 19. 概念板块归属（百度股市通）
+# ─────────────────────────────────────────────────────────
+@app.route("/api/concept")
+def api_concept():
+    code = request.args.get("code", "").strip().zfill(6)
+    if not code:
+        return err("请提供股票代码")
+    try:
+        url = f"https://finance.pae.baidu.com/api/getrelatedblock?code={code}&market=ab&typeCode=all&finClientType=pc"
+        headers = {
+            "User-Agent": UA,
+            "Accept": "application/vnd.finance-web.v1+json",
+            "Origin": "https://gushitong.baidu.com",
+            "Referer": "https://gushitong.baidu.com/",
+        }
+        r = requests.get(url, headers=headers, timeout=10)
+        d = r.json()
+        if str(d.get("ResultCode", -1)) != "0":
+            return err(f"百度PAE: {d}")
+        result = {"industry": [], "concept": [], "region": []}
+        for block in d.get("Result", []):
+            block_type = block.get("type", "")
+            for item in block.get("list", []):
+                entry = {
+                    "name": item.get("name", ""),
+                    "change_pct": item.get("increase", ""),
+                    "desc": item.get("desc", ""),
+                }
+                if "行业" in block_type:
+                    result["industry"].append(entry)
+                elif "概念" in block_type:
+                    result["concept"].append(entry)
+                elif "地域" in block_type:
+                    result["region"].append(entry)
+        return ok(result)
+    except Exception as e:
+        return err(str(e))
+
+# ─────────────────────────────────────────────────────────
+# 20. 新浪财报三表
+# ─────────────────────────────────────────────────────────
+@app.route("/api/finance")
+def api_finance():
+    code = request.args.get("code", "").strip().zfill(6)
+    report_type = request.args.get("type", "lrb")  # lrb/fzb/llb
+    if not code:
+        return err("请提供股票代码")
+    try:
+        prefix = "sh" if code.startswith("6") else "sz"
+        url = "https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022"
+        params = {
+            "paperCode": f"{prefix}{code}",
+            "source": report_type, "type": "0",
+            "page": "1", "num": "8",
+        }
+        r = requests.get(url, params=params, headers={"User-Agent": UA}, timeout=15)
+        report_list = r.json().get("result", {}).get("data", {}).get("report_list", {}) or {}
+        rows = []
+        for period in sorted(report_list.keys(), reverse=True)[:8]:
+            obj = report_list[period]
+            rec = {"报告期": f"{period[:4]}-{period[4:6]}-{period[6:8]}"}
+            for it in obj.get("data", []) or []:
+                title = it.get("item_title", "")
+                if title and it.get("item_value") is not None:
+                    rec[title] = it.get("item_value")
+                    tongbi = it.get("item_tongbi")
+                    if tongbi not in (None, ""):
+                        rec[title + "_同比"] = tongbi
+            rows.append(rec)
+        return ok(rows)
+    except Exception as e:
+        return err(str(e))
+
+# ─────────────────────────────────────────────────────────
+# 21. 巨潮公告
+# ─────────────────────────────────────────────────────────
+@app.route("/api/announcement")
+def api_announcement():
+    code = request.args.get("code", "").strip().zfill(6)
+    if not code:
+        return err("请提供股票代码")
+    try:
+        url = "https://www.cninfo.com.cn/new/hisAnnouncement/query"
+        if code.startswith("6"):
+            org_id = f"gssh0{code}"
+        elif code.startswith(("8", "4")):
+            org_id = f"gsbj0{code}"
+        else:
+            org_id = f"gssz0{code}"
+        payload = {
+            "stock": f"{code},{org_id}",
+            "tabName": "fulltext", "pageSize": "30", "pageNum": "1",
+            "column": "", "category": "", "plate": "", "seDate": "",
+            "searchkey": "", "secid": "", "sortName": "", "sortType": "",
+            "isHLtitle": "true",
+        }
+        headers = {
+            "User-Agent": UA,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": "https://www.cninfo.com.cn/new/disclosure",
+            "Origin": "https://www.cninfo.com.cn",
+        }
+        r = requests.post(url, data=payload, headers=headers, timeout=15)
+        rows = []
+        for item in (r.json().get("announcements") or []):
+            ts = item.get("announcementTime")
+            if isinstance(ts, (int, float)):
+                d_str = datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d")
+            else:
+                d_str = str(ts)[:10] if ts else ""
+            rows.append({
+                "title": item.get("announcementTitle", ""),
+                "type": item.get("announcementTypeName", ""),
+                "date": d_str,
+                "url": f"https://www.cninfo.com.cn/new/disclosure/detail?annoId={item.get('announcementId', '')}",
+            })
+        return ok(rows)
+    except Exception as e:
+        return err(str(e))
+
+# ─────────────────────────────────────────────────────────
 # 健康检测
 # ─────────────────────────────────────────────────────────
 @app.route("/api/ping")
 def api_ping():
     return ok({"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "status": "ok"})
 
+# ─────────────────────────────────────────────────────────
+# 前端页面
+# ─────────────────────────────────────────────────────────
+@app.route('/')
+def index():
+    return send_file(resource_path('index.html'))
+
+def open_browser():
+    import webbrowser
+    webbrowser.open("http://localhost:5000")
+
 if __name__ == "__main__":
     print("=" * 50)
-    print("A股金融终端 后端服务启动中...")
+    print("A股金融终端 启动中...")
     print("访问地址: http://localhost:5000")
     print("=" * 50)
+    threading.Timer(1.5, open_browser).start()
     app.run(host="0.0.0.0", port=5000, debug=False)

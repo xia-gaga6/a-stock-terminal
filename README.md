@@ -2,19 +2,19 @@
 
 ## 快速启动
 
-### 第一步：启动后端
-双击 `start.bat`，或者在终端执行：
-```
-C:\Users\HP\.workbuddy\binaries\python\envs\default\Scripts\python.exe server.py
-```
-看到 `* Running on http://0.0.0.0:5000` 表示后端启动成功。
+### 方式一：EXE 一键启动
+双击 `dist/AStockTerminal.exe`，自动启动后端并打开浏览器。
 
-### 第二步：打开前端
-用浏览器打开 `index.html`，或在 WorkBuddy 里预览。
+### 方式二：Python 启动
+双击 `start.bat`，或在终端执行：
+```
+python server.py
+```
+看到 `* Running on http://0.0.0.0:5000` 表示后端启动成功，浏览器自动打开。
 
 ---
 
-## 数据接口说明
+## 数据接口说明（22个API）
 
 | 接口 | 说明 | 数据源 |
 |------|------|--------|
@@ -30,11 +30,21 @@ C:\Users\HP\.workbuddy\binaries\python\envs\default\Scripts\python.exe server.py
 | `/api/kline` | K线（含MA5/MA20）| 百度股市通 |
 | `/api/search` | 股票代码/名称搜索 | 腾讯 smartbox |
 | `/api/stocknews` | 个股相关新闻 | 东财 |
+| `/api/research` | 研报列表+评级+EPS预测 | 东财 reportapi |
+| `/api/margin` | 融资融券明细 | 东财 datacenter |
+| `/api/blocktrade` | 大宗交易记录 | 东财 datacenter |
+| `/api/holders` | 股东户数变化 | 东财 datacenter |
+| `/api/dividend` | 分红送转历史 | 东财 datacenter |
+| `/api/lockup` | 限售解禁日历 | 东财 datacenter |
+| `/api/concept` | 概念板块归属 | 百度股市通 |
+| `/api/finance` | 财报三表(利润/资产/现金流) | 新浪财经 |
+| `/api/announcement` | 公告全文检索 | 巨潮 cninfo |
+| `/api/ping` | 健康检测 | 本地 |
 
 ## 依赖
 
 ```
-pip install flask flask-cors mootdx requests pandas stockstats
+pip install flask flask-cors requests
 ```
 
 ## 东财防封说明
